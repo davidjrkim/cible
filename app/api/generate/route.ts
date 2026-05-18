@@ -1,6 +1,16 @@
 import { z } from "zod";
 import { scrapeJobPosting } from "@/lib/scrape";
 import { checkRateLimit, clientIp } from "@/lib/ratelimit";
+import {
+  alignCv,
+  critique,
+  extractRequirements,
+  generateQuestions,
+  verifyGroundedness,
+  writeCoverLetter,
+  type AgentTrace,
+  type CriticVerdict,
+} from "@/lib/agents";
 
 export const runtime = "edge";
 
@@ -12,16 +22,6 @@ const BodySchema = z.object({
   cv: z.string().min(50),
   removeAiTells: z.boolean(),
 });
-
-type Stage = { stage: string; agent: string };
-const STAGES: Stage[] = [
-  { stage: "extracting", agent: "requirements_extractor" },
-  { stage: "aligning", agent: "cv_aligner" },
-  { stage: "drafting", agent: "cover_letter_writer" },
-  { stage: "predicting", agent: "question_generator" },
-  { stage: "verifying", agent: "groundedness_verifier" },
-  { stage: "scoring", agent: "critic" },
-];
 
 function sse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -68,18 +68,148 @@ export async function POST(req: Request) {
   }
 
   const traceId = crypto.randomUUID();
+  const t0 = Date.now();
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const enc = new TextEncoder();
-      controller.enqueue(enc.encode(sse("trace", { trace_id: traceId })));
-      for (const s of STAGES) {
-        controller.enqueue(enc.encode(sse("stage", s)));
-        await new Promise((r) => setTimeout(r, 250));
+      const send = (event: string, data: unknown) => controller.enqueue(enc.encode(sse(event, data)));
+
+      try {
+        send("trace", { trace_id: traceId });
+
+        // Step 1: extractor (serial — downstream depends on it).
+        send("stage", { stage: "extracting", agent: "requirements_extractor" });
+        const extractor = await extractRequirements(jdText, { traceId, step: "" });
+        const cvSummary = summarizeCv(cv);
+
+        // Steps 2-4: parallel writers. Announce all three before kickoff.
+        send("stage", { stage: "aligning", agent: "cv_aligner" });
+        send("stage", { stage: "drafting", agent: "cover_letter_writer" });
+        send("stage", { stage: "predicting", agent: "question_generator" });
+
+        // eslint-disable-next-line prefer-const
+        let [aligner, cover, questions] = await Promise.all([
+          alignCv({ requirements: extractor.data, cv }, { traceId, step: "" }),
+          writeCoverLetter({ requirements: extractor.data, cv }, { traceId, step: "" }),
+          generateQuestions(
+            { requirements: extractor.data, cvSummary },
+            { traceId, step: "" },
+          ),
+        ]);
+
+        const traces: AgentTrace[] = [extractor.trace, aligner.trace, cover.trace, questions.trace];
+
+        // Step 5: groundedness verifier with one retry per writer.
+        send("stage", { stage: "verifying", agent: "groundedness_verifier" });
+        let groundedness = await verifyGroundedness(
+          { bullets: aligner.data, coverLetter: cover.data, cv },
+          { traceId, step: "" },
+        );
+        traces.push(...groundedness.traces);
+
+        const retryTasks: Promise<void>[] = [];
+        if (!groundedness.bullets.pass) {
+          retryTasks.push(
+            alignCv(
+              {
+                requirements: extractor.data,
+                cv,
+                retryFeedback: groundedness.bullets.unsupported_claims.join("\n"),
+              },
+              { traceId, step: "" },
+            ).then((r) => {
+              aligner = { data: r.data, trace: { ...r.trace, retries: aligner.trace.retries + 1 } };
+              traces.push(aligner.trace);
+            }),
+          );
+        }
+        if (!groundedness.cover_letter.pass) {
+          retryTasks.push(
+            writeCoverLetter(
+              {
+                requirements: extractor.data,
+                cv,
+                retryFeedback: groundedness.cover_letter.unsupported_claims.join("\n"),
+              },
+              { traceId, step: "" },
+            ).then((r) => {
+              cover = { data: r.data, trace: { ...r.trace, retries: cover.trace.retries + 1 } };
+              traces.push(cover.trace);
+            }),
+          );
+        }
+        if (retryTasks.length > 0) {
+          send("stage", { stage: "retrying", agent: "groundedness_retry" });
+          await Promise.all(retryTasks);
+          groundedness = await verifyGroundedness(
+            { bullets: aligner.data, coverLetter: cover.data, cv },
+            { traceId, step: "" },
+          );
+          traces.push(...groundedness.traces);
+        }
+
+        // Step 6: cross-family critic — telemetry only, never gates retries.
+        send("stage", { stage: "scoring", agent: "critic" });
+        let critic: CriticVerdict | null = null;
+        if (process.env.OPENAI_API_KEY) {
+          try {
+            const result = await critique(
+              {
+                requirements: extractor.data,
+                cvSummary,
+                bullets: aligner.data.bullets,
+                coverLetter: cover.data.cover_letter,
+                questions: questions.data.questions,
+              },
+              { traceId },
+            );
+            critic = result.data;
+            traces.push(result.trace);
+          } catch (err) {
+            console.warn(`critic failed for trace ${traceId}: ${(err as Error).message}`);
+          }
+        }
+
+        const totalCost = traces.reduce((s, t) => s + t.cost_usd, 0);
+        const totalLatencyMs = Date.now() - t0;
+
+        send("result", {
+          trace_id: traceId,
+          source_url: sourceUrl,
+          tailoredBullets: aligner.data.bullets.map((b) =>
+            removeAiTells ? { ...b, text: stripAiTells(b.text) } : b,
+          ),
+          coverLetter: removeAiTells
+            ? stripAiTells(cover.data.cover_letter)
+            : cover.data.cover_letter,
+          likelyQuestions: questions.data.questions,
+          groundedness: {
+            bullets: groundedness.bullets,
+            cover_letter: groundedness.cover_letter,
+          },
+          scores: critic
+            ? {
+                judge_model: "gpt-5",
+                bullets: critic.scores.bullets,
+                cover_letter: critic.scores.cover_letter,
+                questions: critic.scores.questions,
+              }
+            : null,
+          retries: {
+            bullets: aligner.trace.retries,
+            cover_letter: cover.trace.retries,
+            questions: questions.trace.retries,
+          },
+          totalLatencyMs,
+          totalCostUsd: totalCost,
+        });
+        controller.close();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        send("error", { trace_id: traceId, message });
+        controller.close();
       }
-      const result = mockResult(traceId, jdText, cv, removeAiTells, sourceUrl);
-      controller.enqueue(enc.encode(sse("result", result)));
-      controller.close();
     },
   });
 
@@ -92,41 +222,25 @@ export async function POST(req: Request) {
   });
 }
 
-function mockResult(
-  traceId: string,
-  jd: string,
-  cv: string,
-  removeAiTells: boolean,
-  sourceUrl: string | null,
-) {
-  const firstLine = jd.split("\n").find((l) => l.trim().length > 0) ?? "Unknown role";
-  const company = firstLine.split(/[—-]/).pop()?.trim().slice(0, 60) ?? "the team";
-  return {
-    trace_id: traceId,
-    source_url: sourceUrl,
-    tailoredBullets: [
-      { text: `Built systems applicable to ${company}'s needs (stub — real writer agent lands Day 4).`, addresses_requirement: "stub" },
-    ],
-    coverLetter: `Dear ${company} team,\n\nThis is a stub cover letter from the Day 3 mock route. The real Sonnet writer ships Day 4.\n\nBest,\n${cv.split("\n")[0]?.slice(0, 40) ?? "Candidate"}`,
-    likelyQuestions: [
-      { question: "Walk me through your most relevant project.", hint: "stub", type: "technical" },
-      { question: "Tell me about a time you disagreed with a teammate.", hint: "stub", type: "behavioral" },
-      { question: `Why ${company}?`, hint: "stub", type: "company_specific" },
-    ],
-    groundedness: {
-      bullets: { pass: true, unsupported_claims: [] },
-      cover_letter: { pass: true, unsupported_claims: [] },
-    },
-    scores: {
-      judge_model: "gpt-5",
-      bullets: { relevance: 0, specificity: 0 },
-      cover_letter: { relevance: 0, specificity: 0 },
-      questions: { relevance: 0, specificity: 0 },
-    },
-    retries: { bullets: 0, cover_letter: 0, questions: 0 },
-    totalLatencyMs: 0,
-    totalCostUsd: 0,
-    removeAiTells,
-    stub: true,
-  };
+function summarizeCv(cv: string): { seniority: string; top_skills: string[] } {
+  const lower = cv.toLowerCase();
+  const seniority = /staff|principal/.test(lower)
+    ? "staff"
+    : /senior|lead/.test(lower)
+      ? "senior"
+      : /junior|intern/.test(lower)
+        ? "junior"
+        : "mid";
+  return { seniority, top_skills: [] };
+}
+
+// Day 10-11 will expand this list and surface it in the UI. Day 7 ships the plumbing.
+const AI_TELL_WORDS = ["delve", "leverage", "tapestry", "underscore", "moreover", "furthermore"];
+
+function stripAiTells(text: string): string {
+  let out = text.replace(/—/g, ", ");
+  for (const w of AI_TELL_WORDS) {
+    out = out.replace(new RegExp(`\\b${w}\\b`, "gi"), "");
+  }
+  return out.replace(/\s+/g, " ").trim();
 }
