@@ -8,6 +8,33 @@
 
 A static DAG of prompt steps, not a "multi-agent" system:
 
+```
+JD + CV
+   │
+   ▼
+[1] Extractor (Haiku 4.5)  ──►  structured JD JSON
+   │
+   ├──────────────┬──────────────┐         (parallel, prompt-cached)
+   ▼              ▼              ▼
+[2] CV aligner  [3] Cover     [4] Question
+   (Sonnet 4.6)   letter         generator
+                  (Sonnet 4.6)   (Sonnet 4.6)
+   │              │              │
+   └──────────────┴──────────────┘
+                  │
+                  ▼
+        [5] Groundedness verifier  ── retry once on fail ──┐
+            substring → Jaccard → embedding cosine ≥ 0.75  │
+            (text-embedding-3-small)                       │
+                  │ ◄─────────────────────────────────────┘
+                  ▼
+        [6] Cross-family critic (OpenAI gpt-5)
+            telemetry only — does NOT gate retries
+                  │
+                  ▼
+              Result + trace
+```
+
 1. **Requirements extractor** (Claude Haiku 4.5) — JD → structured JSON
 2. **CV aligner** (Claude Sonnet 4.6) — tailored bullets with `cv_evidence_span`
 3. **Cover letter writer** (Claude Sonnet 4.6) — 150-200 words, company-specific hook
