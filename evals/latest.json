@@ -1,0 +1,12 @@
+{
+  "judge_model": "stub",
+  "git_sha": "e0fa7bc",
+  "generated_at": "2026-05-18T10:56:44.609Z",
+  "n": 30,
+  "mean_relevance": 3,
+  "mean_specificity": 3,
+  "groundedness_pass_rate": 1,
+  "ai_tell_pass_rate": 1,
+  "mean_latency_ms": 0,
+  "mean_cost_usd": 0
+}

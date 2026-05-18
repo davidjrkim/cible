@@ -1,0 +1,6 @@
+case_id,category,bullets_relevance,bullets_specificity,cover_letter_relevance,cover_letter_specificity,questions_relevance,questions_specificity,critic_bullets_relevance,critic_bullets_specificity,critic_cover_letter_relevance,critic_cover_letter_specificity,critic_questions_relevance,critic_questions_specificity,groundedness_bullets_pass,groundedness_cover_letter_pass,ai_tell_bullets_pass,ai_tell_cover_letter_pass,retries_bullets,retries_cover_letter,retries_questions,latency_ms,cost_usd,judge_model
+"backend_01","backend",3,3,3,3,3,3,0,0,0,0,0,0,true,true,true,true,0,0,0,0,0,"stub"
+"design_01","design",3,3,3,3,3,3,0,0,0,0,0,0,true,true,true,true,0,0,0,0,0,"stub"
+"fullstack_01","fullstack",3,3,3,3,3,3,0,0,0,0,0,0,true,true,true,true,0,0,0,0,0,"stub"
+"ml_01","ml",4,4,4,4,4,4,0,0,0,0,0,0,true,true,true,true,0,0,0,0,0,"stub"
+"pm_01","pm",3,3,3,3,3,3,0,0,0,0,0,0,true,true,true,true,0,0,0,0,0,"stub"

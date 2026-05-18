@@ -1,10 +1,22 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 
 type JobInputType = "url" | "text";
 type Stage = { stage: string; agent: string };
+
+type Groundedness = {
+  bullets: { pass: boolean; unsupported_claims: string[] };
+  cover_letter: { pass: boolean; unsupported_claims: string[] };
+};
+
+type Scores = {
+  judge_model: string;
+  bullets: { relevance: number; specificity: number };
+  cover_letter: { relevance: number; specificity: number };
+  questions: { relevance: number; specificity: number };
+} | null;
 
 type GenerateResult = {
   trace_id: string;
@@ -12,7 +24,28 @@ type GenerateResult = {
   tailoredBullets: { text: string; addresses_requirement: string }[];
   coverLetter: string;
   likelyQuestions: { question: string; hint: string; type: string }[];
+  groundedness?: Groundedness;
+  scores?: Scores;
+  retries?: { bullets: number; cover_letter: number; questions: number };
+  totalLatencyMs?: number;
+  totalCostUsd?: number;
   stub?: boolean;
+};
+
+type AgentTrace = {
+  step: string;
+  model: string;
+  latency_ms: number;
+  cost_usd: number;
+  retries: number;
+};
+
+type StoredTrace = {
+  trace_id: string;
+  created_at: number;
+  total_latency_ms: number;
+  total_cost_usd: number;
+  agents: AgentTrace[];
 };
 
 const STAGE_LABEL: Record<string, string> = {
@@ -176,12 +209,25 @@ export function GenerateForm() {
 }
 
 function ResultCards({ r }: { r: GenerateResult }) {
+  const groundednessFailed =
+    r.groundedness &&
+    (!r.groundedness.bullets.pass || !r.groundedness.cover_letter.pass);
   return (
     <div className="space-y-6">
       {r.stub && (
         <p className="text-xs text-muted-foreground">
           Day 3 stub response. Real generation lands Day 4 (writers) and Day 6 (verifier).
         </p>
+      )}
+
+      {groundednessFailed && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-4 py-3 text-sm">
+          <p className="font-medium">Ungrounded claims detected</p>
+          <p className="mt-1 text-muted-foreground">
+            The verifier could not match every claim back to your CV after a retry. Review the
+            output carefully before sending.
+          </p>
+        </div>
       )}
 
       <Card title="Tailored CV bullets">
@@ -207,7 +253,146 @@ function ResultCards({ r }: { r: GenerateResult }) {
         </ul>
       </Card>
 
-      <p className="font-mono text-xs text-muted-foreground">trace_id: {r.trace_id}</p>
+      <TraceView result={r} />
+    </div>
+  );
+}
+
+function TraceView({ result }: { result: GenerateResult }) {
+  const [open, setOpen] = useState(false);
+  const [trace, setTrace] = useState<StoredTrace | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open || trace) return;
+    let cancelled = false;
+    (async () => {
+      if (cancelled) return;
+      setLoading(true);
+      setError(null);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const res = await fetch(`/api/trace/${result.trace_id}`).catch(() => null);
+        if (cancelled) return;
+        if (res?.ok) {
+          const json = (await res.json()) as StoredTrace;
+          if (!cancelled) {
+            setTrace(json);
+            setLoading(false);
+          }
+          return;
+        }
+        if (attempt === 0) await new Promise((r) => setTimeout(r, 500));
+      }
+      if (!cancelled) {
+        setError("Trace not available (Redis may be unconfigured in dev).");
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, result.trace_id, trace]);
+
+  return (
+    <div className="rounded-lg border bg-card">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-5 py-3 text-sm font-medium"
+      >
+        <span>{open ? "Hide trace" : "View trace"}</span>
+        <span className="font-mono text-xs text-muted-foreground">
+          {result.totalLatencyMs != null && `${result.totalLatencyMs}ms`}
+          {result.totalCostUsd != null && ` · $${result.totalCostUsd.toFixed(4)}`}
+        </span>
+      </button>
+      {open && (
+        <div className="space-y-4 border-t px-5 py-4">
+          <TraceSummary result={result} />
+          {loading && <p className="text-xs text-muted-foreground">Loading agent chain…</p>}
+          {error && <p className="text-xs text-muted-foreground">{error}</p>}
+          {trace && <AgentChain agents={trace.agents} />}
+          <p className="font-mono text-xs text-muted-foreground">trace_id: {result.trace_id}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TraceSummary({ result }: { result: GenerateResult }) {
+  const g = result.groundedness;
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {g && (
+        <div className="text-xs">
+          <p className="mb-1 font-medium uppercase tracking-wider text-muted-foreground">
+            Groundedness verdict
+          </p>
+          <p>
+            bullets:{" "}
+            <span className={g.bullets.pass ? "text-emerald-600" : "text-amber-600"}>
+              {g.bullets.pass ? "pass" : "FAIL"}
+            </span>
+            {g.bullets.unsupported_claims.length > 0 &&
+              ` (${g.bullets.unsupported_claims.length} unsupported)`}
+          </p>
+          <p>
+            cover letter:{" "}
+            <span className={g.cover_letter.pass ? "text-emerald-600" : "text-amber-600"}>
+              {g.cover_letter.pass ? "pass" : "FAIL"}
+            </span>
+            {g.cover_letter.unsupported_claims.length > 0 &&
+              ` (${g.cover_letter.unsupported_claims.length} unsupported)`}
+          </p>
+        </div>
+      )}
+      {result.scores && (
+        <div className="text-xs">
+          <p className="mb-1 font-medium uppercase tracking-wider text-muted-foreground">
+            Critic scores ({result.scores.judge_model})
+          </p>
+          <p>
+            bullets: {result.scores.bullets.relevance}/{result.scores.bullets.specificity}
+          </p>
+          <p>
+            cover letter: {result.scores.cover_letter.relevance}/
+            {result.scores.cover_letter.specificity}
+          </p>
+          <p>
+            questions: {result.scores.questions.relevance}/{result.scores.questions.specificity}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AgentChain({ agents }: { agents: AgentTrace[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-left text-muted-foreground">
+            <th className="py-1 pr-4 font-medium">Step</th>
+            <th className="py-1 pr-4 font-medium">Model</th>
+            <th className="py-1 pr-4 text-right font-medium">Latency</th>
+            <th className="py-1 pr-4 text-right font-medium">Cost</th>
+            <th className="py-1 text-right font-medium">Retries</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {agents.map((a, i) => (
+            <tr key={i} className="border-t">
+              <td className="py-1 pr-4">{a.step}</td>
+              <td className="py-1 pr-4 text-muted-foreground">{a.model}</td>
+              <td className="py-1 pr-4 text-right tabular-nums">{a.latency_ms}ms</td>
+              <td className="py-1 pr-4 text-right tabular-nums">${a.cost_usd.toFixed(5)}</td>
+              <td className="py-1 text-right tabular-nums">{a.retries}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

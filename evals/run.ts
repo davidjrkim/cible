@@ -80,12 +80,57 @@ async function main() {
   writeCsv(csvPath, rows);
   console.log(`\nWrote ${csvPath}`);
 
+  writeLatestSummary(rows, sha);
   printSummary(rows);
 
   if (args.compareAgainst) {
     const exit = comparePairwise(args.compareAgainst, rows);
     process.exit(exit);
   }
+}
+
+function writeLatestSummary(rows: Row[], sha: string): void {
+  const mean = (xs: number[]) => (xs.length === 0 ? 0 : xs.reduce((a, b) => a + b, 0) / xs.length);
+  const pct = (xs: boolean[]) => (xs.length === 0 ? 0 : xs.filter(Boolean).length / xs.length);
+  const rel = [
+    ...rows.map((r) => r.bullets_relevance),
+    ...rows.map((r) => r.cover_letter_relevance),
+    ...rows.map((r) => r.questions_relevance),
+  ];
+  const spec = [
+    ...rows.map((r) => r.bullets_specificity),
+    ...rows.map((r) => r.cover_letter_specificity),
+    ...rows.map((r) => r.questions_specificity),
+  ];
+  const grounded = rows.flatMap((r) => [r.groundedness_bullets_pass, r.groundedness_cover_letter_pass]);
+  const aiTell = rows.flatMap((r) => [r.ai_tell_bullets_pass, r.ai_tell_cover_letter_pass]);
+  const judgeModel = rows[0]?.judge_model ?? "unknown";
+
+  const summary = {
+    judge_model: judgeModel,
+    git_sha: sha,
+    generated_at: new Date().toISOString(),
+    n: rows.length,
+    mean_relevance: round2(mean(rel)),
+    mean_specificity: round2(mean(spec)),
+    groundedness_pass_rate: round3(pct(grounded)),
+    ai_tell_pass_rate: round3(pct(aiTell)),
+    mean_latency_ms: Math.round(mean(rows.map((r) => r.latency_ms))),
+    mean_cost_usd: round4(mean(rows.map((r) => r.cost_usd))),
+  };
+  const path = join(import.meta.dirname, "latest.json");
+  writeFileSync(path, JSON.stringify(summary, null, 2) + "\n");
+  console.log(`Wrote ${path}`);
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+function round3(n: number): number {
+  return Math.round(n * 1000) / 1000;
+}
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
 }
 
 function printSummary(rows: Row[]) {

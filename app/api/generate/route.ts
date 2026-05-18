@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { scrapeJobPosting } from "@/lib/scrape";
 import { checkRateLimit, clientIp } from "@/lib/ratelimit";
+import { recordGeneration, saveTrace } from "@/lib/persistence";
 import {
   alignCv,
   critique,
@@ -173,6 +174,24 @@ export async function POST(req: Request) {
 
         const totalCost = traces.reduce((s, t) => s + t.cost_usd, 0);
         const totalLatencyMs = Date.now() - t0;
+        const scores = critic
+          ? {
+              judge_model: "gpt-5",
+              bullets: critic.scores.bullets,
+              cover_letter: critic.scores.cover_letter,
+              questions: critic.scores.questions,
+            }
+          : null;
+        const retries = {
+          bullets: aligner.trace.retries,
+          cover_letter: cover.trace.retries,
+          questions: questions.trace.retries,
+        };
+        const groundednessSummary = {
+          bullets: groundedness.bullets,
+          cover_letter: groundedness.cover_letter,
+        };
+        const createdAt = Date.now();
 
         send("result", {
           trace_id: traceId,
@@ -184,26 +203,39 @@ export async function POST(req: Request) {
             ? stripAiTells(cover.data.cover_letter)
             : cover.data.cover_letter,
           likelyQuestions: questions.data.questions,
-          groundedness: {
-            bullets: groundedness.bullets,
-            cover_letter: groundedness.cover_letter,
-          },
-          scores: critic
-            ? {
-                judge_model: "gpt-5",
-                bullets: critic.scores.bullets,
-                cover_letter: critic.scores.cover_letter,
-                questions: critic.scores.questions,
-              }
-            : null,
-          retries: {
-            bullets: aligner.trace.retries,
-            cover_letter: cover.trace.retries,
-            questions: questions.trace.retries,
-          },
+          groundedness: groundednessSummary,
+          scores,
+          retries,
           totalLatencyMs,
           totalCostUsd: totalCost,
         });
+
+        // Persist before closing the stream so the Edge runtime doesn't cancel
+        // the Redis writes. The user already has the result; the extra wait
+        // only delays stream termination, not first byte.
+        try {
+          await Promise.all([
+            saveTrace({
+              trace_id: traceId,
+              created_at: createdAt,
+              source_url: sourceUrl,
+              total_latency_ms: totalLatencyMs,
+              total_cost_usd: totalCost,
+              retries,
+              groundedness: groundednessSummary,
+              scores,
+              agents: traces,
+            }),
+            recordGeneration({
+              trace_id: traceId,
+              latency_ms: totalLatencyMs,
+              cost_usd: totalCost,
+              created_at: createdAt,
+            }),
+          ]);
+        } catch (err) {
+          console.warn(`persistence failed for trace ${traceId}: ${(err as Error).message}`);
+        }
         controller.close();
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
