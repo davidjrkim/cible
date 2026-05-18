@@ -44,7 +44,7 @@ JD + CV
 
 Steps 2-4 run in parallel. Prompt caching applied to the raw CV and structured JD blocks across the parallel writers.
 
-See [PRD.md](PRD.md) for the full design rationale.
+See [PRD.md](PRD.md) for the full design rationale, or [case-study.md](case-study.md) for the post-launch write-up on the two load-bearing decisions (cross-family judge + deterministic verifier).
 
 ## Evals
 
