@@ -4,6 +4,7 @@ import {
   critique,
   extractRequirements,
   generateQuestions,
+  verifyGroundedness,
   writeCoverLetter,
   type AgentTrace,
   type CriticVerdict,
@@ -58,13 +59,61 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
   const cvSummary = summarizeCv(c.cv);
 
   // Steps 2, 3, 4 run in parallel.
-  const [aligner, cover, questions] = await Promise.all([
+  let [aligner, cover, questions] = await Promise.all([
     alignCv({ requirements: extractor.data, cv: c.cv }, meta),
     writeCoverLetter({ requirements: extractor.data, cv: c.cv }, meta),
     generateQuestions({ requirements: extractor.data, cvSummary }, meta),
   ]);
 
   const traces: AgentTrace[] = [extractor.trace, aligner.trace, cover.trace, questions.trace];
+
+  // Step 5: groundedness verifier. One retry per writer if claims unsupported.
+  let groundedness = await verifyGroundedness(
+    { bullets: aligner.data, coverLetter: cover.data, cv: c.cv },
+    meta,
+  );
+  traces.push(...groundedness.traces);
+
+  const retryTasks: Promise<void>[] = [];
+  if (!groundedness.bullets.pass) {
+    retryTasks.push(
+      alignCv(
+        {
+          requirements: extractor.data,
+          cv: c.cv,
+          retryFeedback: groundedness.bullets.unsupported_claims.join("\n"),
+        },
+        meta,
+      ).then((r) => {
+        aligner = { data: r.data, trace: { ...r.trace, retries: aligner.trace.retries + 1 } };
+        traces.push(aligner.trace);
+      }),
+    );
+  }
+  if (!groundedness.cover_letter.pass) {
+    retryTasks.push(
+      writeCoverLetter(
+        {
+          requirements: extractor.data,
+          cv: c.cv,
+          retryFeedback: groundedness.cover_letter.unsupported_claims.join("\n"),
+        },
+        meta,
+      ).then((r) => {
+        cover = { data: r.data, trace: { ...r.trace, retries: cover.trace.retries + 1 } };
+        traces.push(cover.trace);
+      }),
+    );
+  }
+  if (retryTasks.length > 0) {
+    await Promise.all(retryTasks);
+    // Re-verify once; whatever still fails ships with a visible warning (PRD §6).
+    groundedness = await verifyGroundedness(
+      { bullets: aligner.data, coverLetter: cover.data, cv: c.cv },
+      meta,
+    );
+    traces.push(...groundedness.traces);
+  }
 
   // Step 6: cross-family critic (telemetry only — does not gate retries).
   let critic: CriticVerdict | null = null;
@@ -104,10 +153,9 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
     cover_letter_evidence_spans: cover.data.cv_evidence_spans,
     questions: questions.data.questions,
     critic,
-    // Day 6: groundedness verifier. Optimistic pass for now.
     groundedness: {
-      bullets: { pass: true, unsupported_claims: [] },
-      cover_letter: { pass: true, unsupported_claims: [] },
+      bullets: groundedness.bullets,
+      cover_letter: groundedness.cover_letter,
     },
     ai_tell_check: {
       bullets: { pass: true, offending_tokens: [] },
