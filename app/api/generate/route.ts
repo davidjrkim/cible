@@ -2,6 +2,7 @@ import { z } from "zod";
 import { scrapeJobPosting } from "@/lib/scrape";
 import { checkRateLimit, clientIp } from "@/lib/ratelimit";
 import { recordGeneration, saveTrace } from "@/lib/persistence";
+import { stripAiTells } from "@/lib/ai-tells";
 import {
   alignCv,
   critique,
@@ -91,8 +92,8 @@ export async function POST(req: Request) {
 
         // eslint-disable-next-line prefer-const
         let [aligner, cover, questions] = await Promise.all([
-          alignCv({ requirements: extractor.data, cv }, { traceId, step: "" }),
-          writeCoverLetter({ requirements: extractor.data, cv }, { traceId, step: "" }),
+          alignCv({ requirements: extractor.data, cv, removeAiTells }, { traceId, step: "" }),
+          writeCoverLetter({ requirements: extractor.data, cv, removeAiTells }, { traceId, step: "" }),
           generateQuestions(
             { requirements: extractor.data, cvSummary },
             { traceId, step: "" },
@@ -116,6 +117,7 @@ export async function POST(req: Request) {
               {
                 requirements: extractor.data,
                 cv,
+                removeAiTells,
                 retryFeedback: groundedness.bullets.unsupported_claims.join("\n"),
               },
               { traceId, step: "" },
@@ -131,6 +133,7 @@ export async function POST(req: Request) {
               {
                 requirements: extractor.data,
                 cv,
+                removeAiTells,
                 retryFeedback: groundedness.cover_letter.unsupported_claims.join("\n"),
               },
               { traceId, step: "" },
@@ -266,13 +269,3 @@ function summarizeCv(cv: string): { seniority: string; top_skills: string[] } {
   return { seniority, top_skills: [] };
 }
 
-// Day 10-11 will expand this list and surface it in the UI. Day 7 ships the plumbing.
-const AI_TELL_WORDS = ["delve", "leverage", "tapestry", "underscore", "moreover", "furthermore"];
-
-function stripAiTells(text: string): string {
-  let out = text.replace(/—/g, ", ");
-  for (const w of AI_TELL_WORDS) {
-    out = out.replace(new RegExp(`\\b${w}\\b`, "gi"), "");
-  }
-  return out.replace(/\s+/g, " ").trim();
-}

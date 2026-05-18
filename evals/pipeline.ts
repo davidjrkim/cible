@@ -9,6 +9,7 @@ import {
   type AgentTrace,
   type CriticVerdict,
 } from "../lib/agents/index.ts";
+import { aiTellCheck } from "../lib/ai-tells.ts";
 
 export type PipelineOutputs = {
   jd_structured: {
@@ -58,10 +59,13 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
   const extractor = await extractRequirements(c.jd, meta);
   const cvSummary = summarizeCv(c.cv);
 
-  // Steps 2, 3, 4 run in parallel.
+  // Steps 2, 3, 4 run in parallel. Evals always exercise the removeAiTells
+  // prompt branch — that's the production default and what the pre-strip
+  // ai_tell_check is testing the model on.
+  // eslint-disable-next-line prefer-const
   let [aligner, cover, questions] = await Promise.all([
-    alignCv({ requirements: extractor.data, cv: c.cv }, meta),
-    writeCoverLetter({ requirements: extractor.data, cv: c.cv }, meta),
+    alignCv({ requirements: extractor.data, cv: c.cv, removeAiTells: true }, meta),
+    writeCoverLetter({ requirements: extractor.data, cv: c.cv, removeAiTells: true }, meta),
     generateQuestions({ requirements: extractor.data, cvSummary }, meta),
   ]);
 
@@ -81,6 +85,7 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
         {
           requirements: extractor.data,
           cv: c.cv,
+          removeAiTells: true,
           retryFeedback: groundedness.bullets.unsupported_claims.join("\n"),
         },
         meta,
@@ -96,6 +101,7 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
         {
           requirements: extractor.data,
           cv: c.cv,
+          removeAiTells: true,
           retryFeedback: groundedness.cover_letter.unsupported_claims.join("\n"),
         },
         meta,
@@ -138,6 +144,14 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
 
   const totalCost = traces.reduce((s, t) => s + t.cost_usd, 0);
 
+  // Pre-strip AI-tell check: the model output itself is inspected, not the
+  // filtered version the UI ships. A failing case here means the prompt isn't
+  // teaching the model — checking the post-strip output would only test the
+  // filter (PRD §7).
+  const bulletsJoined = aligner.data.bullets.map((b) => b.text).join("\n");
+  const bulletsAiTell = aiTellCheck(bulletsJoined);
+  const coverAiTell = aiTellCheck(cover.data.cover_letter);
+
   return {
     jd_structured: {
       company_name: extractor.data.company_name,
@@ -158,8 +172,8 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
       cover_letter: groundedness.cover_letter,
     },
     ai_tell_check: {
-      bullets: { pass: true, offending_tokens: [] },
-      cover_letter: { pass: true, offending_tokens: [] },
+      bullets: bulletsAiTell,
+      cover_letter: coverAiTell,
     },
     retries: {
       bullets: aligner.trace.retries,

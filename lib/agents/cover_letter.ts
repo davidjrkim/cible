@@ -1,4 +1,5 @@
 import { MODELS } from "@/lib/models";
+import { AI_TELL_INSTRUCTION } from "@/lib/ai-tells";
 import {
   anthropic,
   costFromUsage,
@@ -11,7 +12,7 @@ import { CoverLetterSchema, type AgentTrace, type CoverLetter, type Requirements
 
 const STEP = "cover_letter_writer";
 
-const SYSTEM = `You write a tailored 150-200 word cover letter for a specific role.
+const BASE_SYSTEM = `You write a tailored 150-200 word cover letter for a specific role.
 
 Return ONLY a JSON object matching this exact shape (no prose, no markdown):
 {
@@ -29,9 +30,10 @@ Hard rules:
 export type CoverLetterResult = { data: CoverLetter; trace: AgentTrace };
 
 export async function writeCoverLetter(
-  args: { requirements: Requirements; cv: string; retryFeedback?: string },
+  args: { requirements: Requirements; cv: string; retryFeedback?: string; removeAiTells?: boolean },
   meta: TraceMeta,
 ): Promise<CoverLetterResult> {
+  const system = args.removeAiTells ? `${BASE_SYSTEM}\n\n${AI_TELL_INSTRUCTION}` : BASE_SYSTEM;
   const t0 = Date.now();
   let retries = 0;
   let lastError: Error | null = null;
@@ -60,7 +62,7 @@ export async function writeCoverLetter(
       {
         model: MODELS.writer,
         max_tokens: 1500,
-        system: SYSTEM,
+        system,
         messages: [{ role: "user", content }],
       },
       { headers: traceHeaders({ ...meta, step: STEP }) },

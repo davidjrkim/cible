@@ -1,4 +1,5 @@
 import { MODELS } from "@/lib/models";
+import { AI_TELL_INSTRUCTION } from "@/lib/ai-tells";
 import {
   anthropic,
   costFromUsage,
@@ -11,7 +12,7 @@ import { BulletsSchema, type AgentTrace, type Bullets, type Requirements } from 
 
 const STEP = "cv_aligner";
 
-const SYSTEM = `You rewrite a candidate's CV into 4-6 tailored bullets that map directly to a specific job description.
+const BASE_SYSTEM = `You rewrite a candidate's CV into 4-6 tailored bullets that map directly to a specific job description.
 
 Return ONLY a JSON object matching this exact shape (no prose, no markdown):
 {
@@ -31,9 +32,10 @@ Hard rules:
 export type AlignerResult = { data: Bullets; trace: AgentTrace };
 
 export async function alignCv(
-  args: { requirements: Requirements; cv: string; retryFeedback?: string },
+  args: { requirements: Requirements; cv: string; retryFeedback?: string; removeAiTells?: boolean },
   meta: TraceMeta,
 ): Promise<AlignerResult> {
+  const system = args.removeAiTells ? `${BASE_SYSTEM}\n\n${AI_TELL_INSTRUCTION}` : BASE_SYSTEM;
   const t0 = Date.now();
   let retries = 0;
   let lastError: Error | null = null;
@@ -62,7 +64,7 @@ export async function alignCv(
       {
         model: MODELS.writer,
         max_tokens: 2048,
-        system: SYSTEM,
+        system,
         messages: [{ role: "user", content: baseContent }],
       },
       { headers: traceHeaders({ ...meta, step: STEP }) },

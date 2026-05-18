@@ -127,6 +127,31 @@ export async function readStats(): Promise<StatsSnapshot> {
   };
 }
 
+export type CopyTarget = "bullets" | "cover_letter" | "questions";
+
+export async function recordCopyClicked(args: {
+  trace_id: string;
+  target: CopyTarget;
+  at: number;
+}): Promise<boolean> {
+  const r = redis();
+  if (!r) return false;
+  // Idempotent: one event per (trace, target). Prevents accidental
+  // double-counts from React StrictMode renders or rage-clicks.
+  const setKey = `events:copy:${args.trace_id}`;
+  const added = await r.sadd(setKey, args.target);
+  if (added === 0) return false;
+  // TTL aligns with trace TTL (PRD §12) so old traces drop together.
+  await r.expire(setKey, 7 * 24 * 60 * 60);
+  const p = r.pipeline();
+  p.incr("events:copy_clicked:total");
+  p.incr(`events:copy_clicked:by_target:${args.target}`);
+  p.zadd("events:copy_clicked:24h", { score: args.at, member: `${args.trace_id}:${args.target}` });
+  p.zremrangebyscore("events:copy_clicked:24h", 0, args.at - 24 * 60 * 60 * 1000);
+  await p.exec();
+  return true;
+}
+
 function percentile(xs: number[], p: number): number | null {
   if (xs.length === 0) return null;
   const sorted = [...xs].sort((a, b) => a - b);
