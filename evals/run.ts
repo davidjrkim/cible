@@ -38,6 +38,7 @@ async function main() {
     const out = await runPipeline(c);
     const verdict = await judgeOutput(c, out);
     const elapsed = Date.now() - t0;
+    const c0 = out.critic;
     rows.push({
       case_id: c.id,
       category: c.category,
@@ -47,6 +48,12 @@ async function main() {
       cover_letter_specificity: verdict.scores.cover_letter.specificity,
       questions_relevance: verdict.scores.questions.relevance,
       questions_specificity: verdict.scores.questions.specificity,
+      critic_bullets_relevance: c0?.scores.bullets.relevance ?? 0,
+      critic_bullets_specificity: c0?.scores.bullets.specificity ?? 0,
+      critic_cover_letter_relevance: c0?.scores.cover_letter.relevance ?? 0,
+      critic_cover_letter_specificity: c0?.scores.cover_letter.specificity ?? 0,
+      critic_questions_relevance: c0?.scores.questions.relevance ?? 0,
+      critic_questions_specificity: c0?.scores.questions.specificity ?? 0,
       groundedness_bullets_pass: verdict.groundedness.bullets.pass,
       groundedness_cover_letter_pass: verdict.groundedness.cover_letter.pass,
       ai_tell_bullets_pass: verdict.ai_tell_check.bullets.pass,

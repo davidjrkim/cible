@@ -31,6 +31,33 @@ export const CoverLetterSchema = z.object({
 });
 export type CoverLetter = z.infer<typeof CoverLetterSchema>;
 
+export const QuestionTypeSchema = z.enum(["technical", "behavioral", "company_specific"]);
+export type QuestionType = z.infer<typeof QuestionTypeSchema>;
+
+export const QuestionsSchema = z.object({
+  questions: z
+    .array(
+      z.object({
+        question: z.string().min(1),
+        hint: z.string().min(1),
+        type: QuestionTypeSchema,
+      }),
+    )
+    .min(3)
+    .max(5),
+});
+export type Questions = z.infer<typeof QuestionsSchema>;
+
+export const CriticVerdictSchema = z.object({
+  scores: z.object({
+    bullets: z.object({ relevance: z.number().min(1).max(5), specificity: z.number().min(1).max(5) }),
+    cover_letter: z.object({ relevance: z.number().min(1).max(5), specificity: z.number().min(1).max(5) }),
+    questions: z.object({ relevance: z.number().min(1).max(5), specificity: z.number().min(1).max(5) }),
+  }),
+  notes: z.string(),
+});
+export type CriticVerdict = z.infer<typeof CriticVerdictSchema>;
+
 export type AgentTrace = {
   step: string;
   model: string;

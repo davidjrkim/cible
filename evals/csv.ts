@@ -10,6 +10,12 @@ export type Row = {
   cover_letter_specificity: number;
   questions_relevance: number;
   questions_specificity: number;
+  critic_bullets_relevance: number;
+  critic_bullets_specificity: number;
+  critic_cover_letter_relevance: number;
+  critic_cover_letter_specificity: number;
+  critic_questions_relevance: number;
+  critic_questions_specificity: number;
   groundedness_bullets_pass: boolean;
   groundedness_cover_letter_pass: boolean;
   ai_tell_bullets_pass: boolean;
@@ -31,6 +37,12 @@ const COLUMNS: (keyof Row)[] = [
   "cover_letter_specificity",
   "questions_relevance",
   "questions_specificity",
+  "critic_bullets_relevance",
+  "critic_bullets_specificity",
+  "critic_cover_letter_relevance",
+  "critic_cover_letter_specificity",
+  "critic_questions_relevance",
+  "critic_questions_specificity",
   "groundedness_bullets_pass",
   "groundedness_cover_letter_pass",
   "ai_tell_bullets_pass",

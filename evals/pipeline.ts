@@ -1,9 +1,12 @@
 import type { Case } from "./cases.ts";
 import {
   alignCv,
+  critique,
   extractRequirements,
+  generateQuestions,
   writeCoverLetter,
   type AgentTrace,
+  type CriticVerdict,
 } from "../lib/agents/index.ts";
 
 export type PipelineOutputs = {
@@ -20,6 +23,7 @@ export type PipelineOutputs = {
   cover_letter: string;
   cover_letter_evidence_spans: string[];
   questions: { question: string; hint: string; type: "technical" | "behavioral" | "company_specific" }[];
+  critic: CriticVerdict | null;
   groundedness: {
     bullets: { pass: boolean; unsupported_claims: string[] };
     cover_letter: { pass: boolean; unsupported_claims: string[] };
@@ -34,12 +38,16 @@ export type PipelineOutputs = {
   agent_traces: AgentTrace[];
 };
 
-function isDryRun(): boolean {
+function isAnthropicDryRun(): boolean {
   return process.env.EVAL_DRY_RUN === "1" || !process.env.ANTHROPIC_API_KEY;
 }
 
+function isCriticDryRun(): boolean {
+  return process.env.EVAL_DRY_RUN === "1" || !process.env.OPENAI_API_KEY;
+}
+
 export async function runPipeline(c: Case): Promise<PipelineOutputs> {
-  if (isDryRun()) return stubPipeline(c);
+  if (isAnthropicDryRun()) return stubPipeline(c);
 
   const t0 = Date.now();
   const traceId = `eval-${c.id}-${Date.now()}`;
@@ -47,14 +55,38 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
 
   // Step 1: extract requirements (serial — downstream steps depend on it).
   const extractor = await extractRequirements(c.jd, meta);
+  const cvSummary = summarizeCv(c.cv);
 
-  // Steps 2 & 3 run in parallel. Step 4 (questions) lands Day 5.
-  const [aligner, cover] = await Promise.all([
+  // Steps 2, 3, 4 run in parallel.
+  const [aligner, cover, questions] = await Promise.all([
     alignCv({ requirements: extractor.data, cv: c.cv }, meta),
     writeCoverLetter({ requirements: extractor.data, cv: c.cv }, meta),
+    generateQuestions({ requirements: extractor.data, cvSummary }, meta),
   ]);
 
-  const traces = [extractor.trace, aligner.trace, cover.trace];
+  const traces: AgentTrace[] = [extractor.trace, aligner.trace, cover.trace, questions.trace];
+
+  // Step 6: cross-family critic (telemetry only — does not gate retries).
+  let critic: CriticVerdict | null = null;
+  if (!isCriticDryRun()) {
+    try {
+      const result = await critique(
+        {
+          requirements: extractor.data,
+          cvSummary,
+          bullets: aligner.data.bullets,
+          coverLetter: cover.data.cover_letter,
+          questions: questions.data.questions,
+        },
+        { traceId },
+      );
+      critic = result.data;
+      traces.push(result.trace);
+    } catch (err) {
+      console.warn(`  critic failed for ${c.id}: ${(err as Error).message}`);
+    }
+  }
+
   const totalCost = traces.reduce((s, t) => s + t.cost_usd, 0);
 
   return {
@@ -66,12 +98,12 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
       key_responsibilities: extractor.data.key_responsibilities,
       tone_indicators: extractor.data.tone_indicators,
     },
-    cv_summary: summarizeCv(c.cv),
+    cv_summary: cvSummary,
     bullets: aligner.data.bullets,
     cover_letter: cover.data.cover_letter,
     cover_letter_evidence_spans: cover.data.cv_evidence_spans,
-    // Day 5: question generator. Stubbed for now so judge still has all three outputs.
-    questions: stubQuestions(extractor.data.company_name),
+    questions: questions.data.questions,
+    critic,
     // Day 6: groundedness verifier. Optimistic pass for now.
     groundedness: {
       bullets: { pass: true, unsupported_claims: [] },
@@ -84,7 +116,7 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
     retries: {
       bullets: aligner.trace.retries,
       cover_letter: cover.trace.retries,
-      questions: 0,
+      questions: questions.trace.retries,
     },
     total_latency_ms: Date.now() - t0,
     total_cost_usd: totalCost,
@@ -92,18 +124,9 @@ export async function runPipeline(c: Case): Promise<PipelineOutputs> {
   };
 }
 
-function stubQuestions(company: string): PipelineOutputs["questions"] {
-  return [
-    { question: "Walk me through your most relevant project.", hint: "stub (Day 5)", type: "technical" },
-    { question: "Tell me about a time you disagreed with a teammate.", hint: "stub (Day 5)", type: "behavioral" },
-    { question: `Why ${company}?`, hint: "stub (Day 5)", type: "company_specific" },
-  ];
-}
-
 function summarizeCv(cv: string): { seniority: string; top_skills: string[] } {
   // Heuristic placeholder until a dedicated summarizer lands. Question generator
-  // is the only consumer of this and it's also stubbed, so the values are not
-  // load-bearing yet.
+  // and critic both consume this; values are coarse but sufficient for prompting.
   const lower = cv.toLowerCase();
   const seniority = /staff|principal/.test(lower)
     ? "staff"
@@ -137,7 +160,12 @@ function stubPipeline(c: Case): PipelineOutputs {
     ],
     cover_letter: `Dear ${company} team, here is a stub cover letter generated by the eval harness before live agents run. Set ANTHROPIC_API_KEY (and unset EVAL_DRY_RUN) to call the real writers.`,
     cover_letter_evidence_spans: [c.cv.slice(0, 80)],
-    questions: stubQuestions(company),
+    questions: [
+      { question: "Walk me through your most relevant project.", hint: "stub", type: "technical" },
+      { question: "Tell me about a time you disagreed with a teammate.", hint: "stub", type: "behavioral" },
+      { question: `Why ${company}?`, hint: "stub", type: "company_specific" },
+    ],
+    critic: null,
     groundedness: {
       bullets: { pass: true, unsupported_claims: [] },
       cover_letter: { pass: true, unsupported_claims: [] },
