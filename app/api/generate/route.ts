@@ -3,6 +3,7 @@ import { scrapeJobPosting } from "@/lib/scrape";
 import { checkRateLimit, clientIp } from "@/lib/ratelimit";
 import { recordGeneration, saveTrace } from "@/lib/persistence";
 import { stripAiTells } from "@/lib/ai-tells";
+import { MODELS } from "@/lib/models";
 import {
   alignCv,
   critique,
@@ -156,7 +157,7 @@ export async function POST(req: Request) {
         // Step 6: cross-family critic — telemetry only, never gates retries.
         send("stage", { stage: "scoring", agent: "critic" });
         let critic: CriticVerdict | null = null;
-        if (process.env.OPENAI_API_KEY) {
+        if (process.env.NVIDIA_API_KEY) {
           try {
             const result = await critique(
               {
@@ -179,7 +180,7 @@ export async function POST(req: Request) {
         const totalLatencyMs = Date.now() - t0;
         const scores = critic
           ? {
-              judge_model: "gpt-5",
+              judge_model: MODELS.critic,
               bullets: critic.scores.bullets,
               cover_letter: critic.scores.cover_letter,
               questions: critic.scores.questions,

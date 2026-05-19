@@ -5,8 +5,9 @@ import type { Case } from "./cases.ts";
 import type { PipelineOutputs } from "./pipeline.ts";
 
 const JUDGE_PROMPT_PATH = join(import.meta.dirname, "judge_prompt.md");
-const JUDGE_MODEL_PRIMARY = "gpt-5";
-const JUDGE_MODEL_FALLBACK = "gpt-4.1";
+const NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const JUDGE_MODEL_PRIMARY = "meta/llama-3.3-70b-instruct";
+const JUDGE_MODEL_FALLBACK = "meta/llama-3.1-70b-instruct";
 
 export type JudgeVerdict = {
   judge_model: string;
@@ -38,13 +39,13 @@ function stubVerdict(c: Case, out: PipelineOutputs): JudgeVerdict {
 }
 
 export async function judgeOutput(c: Case, out: PipelineOutputs): Promise<JudgeVerdict> {
-  if (process.env.EVAL_DRY_RUN === "1" || !process.env.OPENAI_API_KEY) {
+  if (process.env.EVAL_DRY_RUN === "1" || !process.env.NVIDIA_API_KEY) {
     return stubVerdict(c, out);
   }
 
   const systemPrompt = readFileSync(JUDGE_PROMPT_PATH, "utf8");
   const userMessage = renderUserMessage(out);
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const openai = new OpenAI({ apiKey: process.env.NVIDIA_API_KEY, baseURL: NVIDIA_BASE_URL });
 
   const callJudge = async (model: string) => {
     return openai.chat.completions.create({

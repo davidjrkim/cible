@@ -1,11 +1,9 @@
 import { MODELS } from "@/lib/models";
 import { AI_TELL_INSTRUCTION } from "@/lib/ai-tells";
 import {
-  anthropic,
   costFromUsage,
-  normalizeUsage,
+  generate,
   stripJsonFence,
-  traceHeaders,
   type TraceMeta,
 } from "./client";
 import { BulletsSchema, type AgentTrace, type Bullets, type Requirements } from "./types";
@@ -40,52 +38,34 @@ export async function alignCv(
   let retries = 0;
   let lastError: Error | null = null;
 
-  const baseContent = [
-    {
-      type: "text" as const,
-      text: `<raw_cv>\n${args.cv}\n</raw_cv>`,
-      cache_control: { type: "ephemeral" as const },
-    },
-    {
-      type: "text" as const,
-      text: `<structured_jd>\n${JSON.stringify(args.requirements, null, 2)}\n</structured_jd>`,
-      cache_control: { type: "ephemeral" as const },
-    },
-    {
-      type: "text" as const,
-      text: args.retryFeedback
-        ? `<feedback>\nThe previous attempt had unsupported claims:\n${args.retryFeedback}\nRemove or rephrase to stay grounded in the CV.\n</feedback>`
-        : "Produce the JSON now.",
-    },
-  ];
+  const userText =
+    `<raw_cv>\n${args.cv}\n</raw_cv>\n\n` +
+    `<structured_jd>\n${JSON.stringify(args.requirements, null, 2)}\n</structured_jd>\n\n` +
+    (args.retryFeedback
+      ? `<feedback>\nThe previous attempt had unsupported claims:\n${args.retryFeedback}\nRemove or rephrase to stay grounded in the CV.\n</feedback>`
+      : "Produce the JSON now.");
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const resp = await anthropic().messages.create(
+    const resp = await generate(
       {
         model: MODELS.writer,
-        max_tokens: 2048,
         system,
-        messages: [{ role: "user", content: baseContent }],
+        userText,
+        maxOutputTokens: 2048,
       },
-      { headers: traceHeaders({ ...meta, step: STEP }) },
+      { ...meta, step: STEP },
     );
 
-    const text = resp.content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("")
-      .trim();
-
     try {
-      const json = JSON.parse(stripJsonFence(text));
+      const json = JSON.parse(stripJsonFence(resp.text));
       const data = BulletsSchema.parse(json);
-      const usage = normalizeUsage(resp.usage);
       return {
         data,
         trace: {
           step: STEP,
           model: MODELS.writer,
           latency_ms: Date.now() - t0,
-          cost_usd: costFromUsage(MODELS.writer, usage),
+          cost_usd: costFromUsage(MODELS.writer, resp.usage),
           retries,
         },
       };

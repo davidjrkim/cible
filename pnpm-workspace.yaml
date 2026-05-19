@@ -3,5 +3,13 @@ onlyBuiltDependencies:
 ignoredBuiltDependencies:
   - sharp
   - unrs-resolver
+  - msw
+  - '@google/genai'
+  - protobufjs
 allowBuilds:
+  '@google/genai': false
   esbuild: true
+  msw: false
+  protobufjs: false
+  sharp: false
+  unrs-resolver: false

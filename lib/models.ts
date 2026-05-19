@@ -1,8 +1,8 @@
 export const MODELS = {
-  extractor: "claude-haiku-4-5-20251001",
-  writer: "claude-sonnet-4-6",
-  verifierClaimExtractor: "claude-haiku-4-5-20251001",
-  critic: "gpt-5",
-  judge: "gpt-5",
-  embedding: "text-embedding-3-small",
+  extractor: "meta/llama-3.1-8b-instruct",
+  writer: "meta/llama-3.3-70b-instruct",
+  verifierClaimExtractor: "meta/llama-3.1-8b-instruct",
+  critic: "meta/llama-3.3-70b-instruct",
+  judge: "meta/llama-3.3-70b-instruct",
+  embedding: "nvidia/nv-embedqa-e5-v5",
 } as const;

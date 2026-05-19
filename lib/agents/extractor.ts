@@ -1,10 +1,8 @@
 import { MODELS } from "@/lib/models";
 import {
-  anthropic,
   costFromUsage,
-  normalizeUsage,
+  generate,
   stripJsonFence,
-  traceHeaders,
   type TraceMeta,
 } from "./client";
 import { RequirementsSchema, type AgentTrace, type Requirements } from "./types";
@@ -40,32 +38,26 @@ export async function extractRequirements(jd: string, meta: TraceMeta): Promise<
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const resp = await anthropic().messages.create(
+    const resp = await generate(
       {
         model: MODELS.extractor,
-        max_tokens: 1024,
         system: SYSTEM,
-        messages: [{ role: "user", content: `<job_description>\n${jd}\n</job_description>` }],
+        userText: `<job_description>\n${jd}\n</job_description>`,
+        maxOutputTokens: 1024,
       },
-      { headers: traceHeaders({ ...meta, step: STEP }) },
+      { ...meta, step: STEP },
     );
 
-    const text = resp.content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("")
-      .trim();
-
     try {
-      const json = JSON.parse(stripJsonFence(text));
+      const json = JSON.parse(stripJsonFence(resp.text));
       const data = RequirementsSchema.parse(json);
-      const usage = normalizeUsage(resp.usage);
       return {
         data,
         trace: {
           step: STEP,
           model: MODELS.extractor,
           latency_ms: Date.now() - t0,
-          cost_usd: costFromUsage(MODELS.extractor, usage),
+          cost_usd: costFromUsage(MODELS.extractor, resp.usage),
           retries,
         },
       };

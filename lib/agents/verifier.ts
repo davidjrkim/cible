@@ -1,12 +1,11 @@
-import OpenAI from "openai";
 import { z } from "zod";
 import { MODELS } from "@/lib/models";
 import {
-  anthropic,
   costFromUsage,
-  normalizeUsage,
+  generate,
+  llm,
   stripJsonFence,
-  traceHeaders,
+  withRpmRetry,
   type TraceMeta,
 } from "./client";
 import type { AgentTrace, Bullets, CoverLetter } from "./types";
@@ -19,8 +18,9 @@ const VERIFIER_STEP = "groundedness_verifier";
 export const COSINE_THRESHOLD = 0.75;
 export const JACCARD_THRESHOLD = 0.6;
 
-// text-embedding-3-small public pricing as of 2026-05: $0.02 / 1M input tokens.
-const EMBED_PRICING_INPUT = 0.02;
+// NVIDIA NIM embeddings are credit-based on the free tier; no published
+// per-token rate. Set to 0 so cost_usd surfaces honestly as $0 when free.
+const EMBED_PRICING_INPUT = 0;
 
 export const ClaimsSchema = z.object({
   bullets_claims: z.array(z.string()),
@@ -60,32 +60,26 @@ export async function extractClaims(
     `<cover_letter>\n${args.coverLetter}\n</cover_letter>`;
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const resp = await anthropic().messages.create(
+    const resp = await generate(
       {
         model: MODELS.verifierClaimExtractor,
-        max_tokens: 1024,
         system: CLAIM_SYSTEM,
-        messages: [{ role: "user", content: userText }],
+        userText,
+        maxOutputTokens: 1024,
       },
-      { headers: traceHeaders({ ...meta, step: CLAIM_STEP }) },
+      { ...meta, step: CLAIM_STEP },
     );
 
-    const text = resp.content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("")
-      .trim();
-
     try {
-      const json = JSON.parse(stripJsonFence(text));
+      const json = JSON.parse(stripJsonFence(resp.text));
       const data = ClaimsSchema.parse(json);
-      const usage = normalizeUsage(resp.usage);
       return {
         data,
         trace: {
           step: CLAIM_STEP,
           model: MODELS.verifierClaimExtractor,
           latency_ms: Date.now() - t0,
-          cost_usd: costFromUsage(MODELS.verifierClaimExtractor, usage),
+          cost_usd: costFromUsage(MODELS.verifierClaimExtractor, resp.usage),
           retries,
         },
       };
@@ -157,21 +151,25 @@ function cosine(a: number[], b: number[]): number {
   return denom === 0 ? 0 : dot / denom;
 }
 
-let _openai: OpenAI | null = null;
-function openai(): OpenAI {
-  if (_openai) return _openai;
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  _openai = new OpenAI({ apiKey });
-  return _openai;
-}
-
-async function embed(inputs: string[]): Promise<{ vectors: number[][]; tokens: number }> {
+async function embed(
+  inputs: string[],
+  inputType: "query" | "passage",
+): Promise<{ vectors: number[][]; tokens: number }> {
   if (inputs.length === 0) return { vectors: [], tokens: 0 };
-  const resp = await openai().embeddings.create({
-    model: MODELS.embedding,
-    input: inputs,
-  });
+  const resp = await withRpmRetry(`nvidia-embed`, () =>
+    llm().embeddings.create(
+      {
+        model: MODELS.embedding,
+        input: inputs,
+        // NVIDIA NV-Embed models require input_type; not in OpenAI's typed
+        // schema, so pass it through and cast.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ...({ input_type: inputType, truncate: "END" } as any),
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      undefined as any,
+    ),
+  );
   return {
     vectors: resp.data.map((d) => d.embedding as number[]),
     tokens: resp.usage?.prompt_tokens ?? 0,
@@ -210,30 +208,42 @@ export async function verifyGroundedness(
     stillUnresolved.push({ source: "cover_letter", claim: c });
   }
 
-  // Tier 3: embeddings against ~3-sentence CV chunks. Skip if no OpenAI key
+  // Tier 3: embeddings against ~3-sentence CV chunks. Skip if no NVIDIA key
   // (treat as unsupported — the deterministic tiers already had a shot).
+  // If the embedding API errors (quota, network, model unavailable), degrade
+  // to the deterministic fallback instead of crashing the whole request.
   let embedCost = 0;
-  if (stillUnresolved.length > 0 && process.env.OPENAI_API_KEY) {
-    const chunks = chunkCv(args.cv);
-    const claimsToEmbed = stillUnresolved.map((u) => u.claim);
-    const { vectors: chunkVecs, tokens: chunkTokens } = await embed(chunks);
-    const { vectors: claimVecs, tokens: claimTokens } = await embed(claimsToEmbed);
-    embedCost = ((chunkTokens + claimTokens) * EMBED_PRICING_INPUT) / 1_000_000;
+  let embedUsed = false;
+  let embedError: string | null = null;
+  if (stillUnresolved.length > 0 && process.env.NVIDIA_API_KEY) {
+    try {
+      const chunks = chunkCv(args.cv);
+      const claimsToEmbed = stillUnresolved.map((u) => u.claim);
+      const { vectors: chunkVecs, tokens: chunkTokens } = await embed(chunks, "passage");
+      const { vectors: claimVecs, tokens: claimTokens } = await embed(claimsToEmbed, "query");
+      embedCost = ((chunkTokens + claimTokens) * EMBED_PRICING_INPUT) / 1_000_000;
+      embedUsed = true;
 
-    for (let i = 0; i < stillUnresolved.length; i++) {
-      const cv = claimVecs[i];
-      let max = 0;
-      for (const v of chunkVecs) {
-        const s = cosine(cv, v);
-        if (s > max) max = s;
+      for (let i = 0; i < stillUnresolved.length; i++) {
+        const cv = claimVecs[i];
+        let max = 0;
+        for (const v of chunkVecs) {
+          const s = cosine(cv, v);
+          if (s > max) max = s;
+        }
+        if (max < COSINE_THRESHOLD) {
+          const u = stillUnresolved[i];
+          if (u.source === "bullets") bulletsUnsupported.push(u.claim);
+          else coverUnsupported.push(u.claim);
+        }
       }
-      if (max < COSINE_THRESHOLD) {
-        const u = stillUnresolved[i];
-        if (u.source === "bullets") bulletsUnsupported.push(u.claim);
-        else coverUnsupported.push(u.claim);
-      }
+    } catch (err) {
+      embedError = err instanceof Error ? err.message : String(err);
+      console.warn(`verifier: embedding fallback (deterministic) — ${embedError}`);
     }
-  } else {
+  }
+
+  if (!embedUsed) {
     for (const u of stillUnresolved) {
       if (u.source === "bullets") bulletsUnsupported.push(u.claim);
       else coverUnsupported.push(u.claim);
@@ -242,7 +252,7 @@ export async function verifyGroundedness(
 
   traces.push({
     step: VERIFIER_STEP,
-    model: process.env.OPENAI_API_KEY ? MODELS.embedding : "deterministic",
+    model: embedUsed ? MODELS.embedding : "deterministic",
     latency_ms: Date.now() - t0 - claimsResult.trace.latency_ms,
     cost_usd: embedCost,
     retries: 0,

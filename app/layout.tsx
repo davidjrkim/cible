@@ -28,13 +28,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      <body className="min-h-full flex flex-col" suppressHydrationWarning>
         {children}
         <footer className="mt-auto border-t px-6 py-6 text-xs text-muted-foreground">
           <p className="mx-auto max-w-3xl">
-            Your JD and CV are sent to Anthropic, OpenAI, and our observability
-            provider (Helicone), and may be retained per their policies. Don&apos;t
-            paste anything you wouldn&apos;t put in a job application.
+            Your JD and CV are sent to NVIDIA (NIM hosted Llama models) and
+            may be retained per their policies. Don&apos;t paste anything you
+            wouldn&apos;t put in a job application.
           </p>
         </footer>
       </body>

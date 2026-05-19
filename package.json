@@ -10,7 +10,6 @@
     "evals": "tsx evals/run.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.96.0",
     "@upstash/ratelimit": "^2.0.8",
     "@upstash/redis": "^1.38.0",
     "cheerio": "^1.2.0",
@@ -40,7 +39,9 @@
   },
   "pnpm": {
     "onlyBuiltDependencies": [
-      "esbuild"
+      "esbuild",
+      "@google/genai",
+      "protobufjs"
     ]
   }
 }

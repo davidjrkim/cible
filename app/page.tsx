@@ -39,7 +39,7 @@ export default function HomePage() {
           />
           <Feature
             title="Cross-family evals"
-            body="OpenAI gpt-5 judges Claude output. No self-grading. Eval scores are public."
+            body="Eval harness scores every run with a separate judge model. Public results, code, and prompts."
           />
         </div>
       </section>

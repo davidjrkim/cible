@@ -1,10 +1,15 @@
-import OpenAI from "openai";
 import { MODELS } from "@/lib/models";
+import { costFromUsage, generate, stripJsonFence } from "./client";
 import { CriticVerdictSchema, type AgentTrace, type CriticVerdict, type Requirements } from "./types";
 
 const STEP = "cross_family_critic";
 
-const SYSTEM = `You are an impartial evaluator scoring outputs from a job-application generator. You were built by a different vendor than the generators on purpose, so your job is to give an independent quality signal, not to rewrite or improve the outputs.
+// Note: critic is now Llama 3.3 70B — same family as the writers (also Llama
+// on NVIDIA NIM). This weakens the bias guarantee of the original cross-family
+// design; treat critic scores as a soft signal, not an independent quality
+// check, until a different-family judge is wired back in (e.g. DeepSeek,
+// Mistral on NIM, or paid OpenAI/Anthropic).
+const SYSTEM = `You are an impartial evaluator scoring outputs from a job-application generator. Your job is to give an independent quality signal, not to rewrite or improve the outputs.
 
 For each output type — bullets, cover_letter, questions — return integer scores 1-5 on two axes:
 
@@ -25,9 +30,6 @@ Return ONLY a JSON object of this exact shape:
   "notes": string
 }`;
 
-// gpt-5 input/output per-million pricing as of 2026-05. Source: OpenAI public pricing.
-const CRITIC_PRICING = { input: 1.25, output: 10 };
-
 export type CriticInput = {
   requirements: Requirements;
   cvSummary: { seniority: string; top_skills: string[] };
@@ -38,15 +40,6 @@ export type CriticInput = {
 
 export type CriticResult = { data: CriticVerdict; trace: AgentTrace };
 
-let _openai: OpenAI | null = null;
-function openai(): OpenAI {
-  if (_openai) return _openai;
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) throw new Error("OPENAI_API_KEY is not set");
-  _openai = new OpenAI({ apiKey });
-  return _openai;
-}
-
 function renderUser(input: CriticInput): string {
   return [
     `<jd_structured>\n${JSON.stringify(input.requirements, null, 2)}\n</jd_structured>`,
@@ -55,25 +48,20 @@ function renderUser(input: CriticInput): string {
   ].join("\n\n");
 }
 
-export async function critique(input: CriticInput, _meta: { traceId: string }): Promise<CriticResult> {
+export async function critique(input: CriticInput, meta: { traceId: string }): Promise<CriticResult> {
   const t0 = Date.now();
-  const resp = await openai().chat.completions.create({
-    model: MODELS.critic,
-    messages: [
-      { role: "system", content: SYSTEM },
-      { role: "user", content: renderUser(input) },
-    ],
-    response_format: { type: "json_object" },
-  });
+  const resp = await generate(
+    {
+      model: MODELS.critic,
+      system: SYSTEM,
+      userText: renderUser(input),
+      maxOutputTokens: 1024,
+    },
+    { traceId: meta.traceId, step: STEP },
+  );
 
-  const raw = resp.choices[0]?.message?.content;
-  if (!raw) throw new Error("critic: empty response");
-  const parsed = JSON.parse(raw);
+  const parsed = JSON.parse(stripJsonFence(resp.text));
   const data = CriticVerdictSchema.parse(parsed);
-
-  const inputTokens = resp.usage?.prompt_tokens ?? 0;
-  const outputTokens = resp.usage?.completion_tokens ?? 0;
-  const cost = (inputTokens * CRITIC_PRICING.input + outputTokens * CRITIC_PRICING.output) / 1_000_000;
 
   return {
     data,
@@ -81,7 +69,7 @@ export async function critique(input: CriticInput, _meta: { traceId: string }): 
       step: STEP,
       model: MODELS.critic,
       latency_ms: Date.now() - t0,
-      cost_usd: cost,
+      cost_usd: costFromUsage(MODELS.critic, resp.usage),
       retries: 0,
     },
   };

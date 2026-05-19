@@ -1,8 +1,8 @@
 # Cible — Cross-Family Judge Prompt
 
-**Judge model:** OpenAI `gpt-5` (fallback: `gpt-4.1`).
+**Judge model:** Llama 3.3 70B via NVIDIA NIM (fallback: Llama 3.1 70B).
 
-**Rationale:** generators are Anthropic Claude. Using a different model family removes the most obvious source of self-graded bias from headline scores. Not bias-free — periodically spot-check 5 cases by hand and compare.
+**Caveat:** generators are also Llama 3.x via NVIDIA NIM, so this is **not** a cross-family judge. Treat headline scores as a directional signal only; spot-check 5 cases by hand each run, and consider wiring a different-family judge (e.g. DeepSeek, Mistral, or paid OpenAI/Anthropic) before publishing comparative numbers.
 
 This file is the canonical, committed judge prompt. Changes are PR-reviewed.
 

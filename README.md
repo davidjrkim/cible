@@ -63,8 +63,8 @@ Latest aggregate scores will appear here once the 30-case baseline runs. Run `pn
 
 ## Stack
 
-Next.js 15 (Edge runtime) · TypeScript · Anthropic SDK with prompt caching · OpenAI SDK (critic + judge + embeddings) · Helicone (observability proxy) · Upstash Redis (rate limiting + trace storage) · Zod (schema-validated outputs)
+Next.js 15 (Edge runtime) · TypeScript · NVIDIA NIM via OpenAI-compatible SDK (Llama 3.1/3.3 generators, verifier claim extraction, critic, judge, NV-Embed for verifier) · Upstash Redis (rate limiting + trace storage) · Zod (schema-validated outputs)
 
 ## Privacy
 
-Your JD and CV are sent to Anthropic, OpenAI, and our observability provider (Helicone) and may be retained per their policies. Do not paste anything you wouldn't put in a job application.
+Your JD and CV are sent to NVIDIA (NIM hosted Llama models) and may be retained per their policies. Do not paste anything you wouldn't put in a job application.

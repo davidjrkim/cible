@@ -1,10 +1,8 @@
 import { MODELS } from "@/lib/models";
 import {
-  anthropic,
   costFromUsage,
-  normalizeUsage,
+  generate,
   stripJsonFence,
-  traceHeaders,
   type TraceMeta,
 } from "./client";
 import { QuestionsSchema, type AgentTrace, type Questions, type Requirements } from "./types";
@@ -47,40 +45,24 @@ export async function generateQuestions(
   let lastError: Error | null = null;
   let typeMixFeedback = "";
 
-  const buildContent = (feedback: string) => [
-    {
-      type: "text" as const,
-      text: `<structured_jd>\n${JSON.stringify(args.requirements, null, 2)}\n</structured_jd>`,
-      cache_control: { type: "ephemeral" as const },
-    },
-    {
-      type: "text" as const,
-      text: `<cv_summary>\n${JSON.stringify(args.cvSummary, null, 2)}\n</cv_summary>`,
-    },
-    {
-      type: "text" as const,
-      text: feedback || "Produce the JSON now.",
-    },
-  ];
+  const buildUserText = (feedback: string) =>
+    `<structured_jd>\n${JSON.stringify(args.requirements, null, 2)}\n</structured_jd>\n\n` +
+    `<cv_summary>\n${JSON.stringify(args.cvSummary, null, 2)}\n</cv_summary>\n\n` +
+    (feedback || "Produce the JSON now.");
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const resp = await anthropic().messages.create(
+    const resp = await generate(
       {
         model: MODELS.writer,
-        max_tokens: 1024,
         system: SYSTEM,
-        messages: [{ role: "user", content: buildContent(typeMixFeedback) }],
+        userText: buildUserText(typeMixFeedback),
+        maxOutputTokens: 1024,
       },
-      { headers: traceHeaders({ ...meta, step: STEP }) },
+      { ...meta, step: STEP },
     );
 
-    const text = resp.content
-      .map((b) => (b.type === "text" ? b.text : ""))
-      .join("")
-      .trim();
-
     try {
-      const json = JSON.parse(stripJsonFence(text));
+      const json = JSON.parse(stripJsonFence(resp.text));
       const data = QuestionsSchema.parse(json);
       const missing = missingTypes(data.questions);
       if (missing.length > 0 && attempt === 0) {
@@ -88,14 +70,13 @@ export async function generateQuestions(
         retries++;
         continue;
       }
-      const usage = normalizeUsage(resp.usage);
       return {
         data,
         trace: {
           step: STEP,
           model: MODELS.writer,
           latency_ms: Date.now() - t0,
-          cost_usd: costFromUsage(MODELS.writer, usage),
+          cost_usd: costFromUsage(MODELS.writer, resp.usage),
           retries,
         },
       };
