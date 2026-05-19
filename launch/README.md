@@ -6,7 +6,6 @@ Before posting:
 - [ ] Verify cible.work is up and the happy path works on a fresh browser
 - [ ] Verify `/stats` page shows real numbers (not zeros)
 - [ ] Verify rate limit doesn't block the first wave of curious clickers
-- [ ] Have Helicone open in another tab to watch errors live
 - [ ] Have a rollback story ready if something breaks (Vercel "Promote previous deployment")
 
 Posting order, lowest-stakes first so any framing bugs surface before HN:

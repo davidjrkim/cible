@@ -18,6 +18,6 @@ What I actually wanted to build, and what makes this worth posting here, is the 
 
 I'm explicit in the README that this is also a portfolio piece — I'd rather say that than dress a portfolio project as a startup. If you're an AI engineer the eval harness and the deterministic verifier are the interesting parts; if you're job searching the tool itself works.
 
-Stack: Next.js 15 on Vercel Edge, Anthropic + OpenAI, Helicone for observability, Upstash Redis for rate limiting.
+Stack: Next.js 15 on Vercel Edge, Anthropic + OpenAI, Upstash Redis for rate limiting.
 
 Repo: [github link]. Happy to answer questions on the verifier calibration, the judge prompt, or the cost numbers.

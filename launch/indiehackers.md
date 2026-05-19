@@ -24,6 +24,6 @@ What I actually want to talk about here is the build, because IH has more builde
 
 **Costs so far:** ~$80 in API spend during dev, almost entirely the eval runs. Per-generation cost in prod is ~$0.04 base.
 
-Stack: Next.js 15 on Vercel Edge, Anthropic + OpenAI, Helicone, Upstash Redis.
+Stack: Next.js 15 on Vercel Edge, Anthropic + OpenAI, Upstash Redis.
 
 Happy to answer anything about the eval setup, the prompt-caching wins (cache reads cut input cost ~90% on the CV across the parallel writers), or the day-13 launch nerves.

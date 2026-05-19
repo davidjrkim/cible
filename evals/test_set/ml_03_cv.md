@@ -23,7 +23,7 @@ davidjrkims@example.com · github.com/davidjrkims · cible.work
 
 ## Skills
 
-Python, TypeScript, Anthropic API + prompt caching, OpenAI API, eval harnesses (paired Wilcoxon, per-case regression gating, cross-family judges), structured outputs (Zod + tool use), retrieval / embeddings, Pinecone, observability (Helicone)
+Python, TypeScript, Anthropic API + prompt caching, OpenAI API, eval harnesses (paired Wilcoxon, per-case regression gating, cross-family judges), structured outputs (Zod + tool use), retrieval / embeddings, Pinecone
 
 ## Education
 

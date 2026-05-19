@@ -247,20 +247,12 @@ The honesty of *naming the judge model* is the strongest AI engineering signal i
 
 ## 8. Observability
 
-Every agent call is logged. Two layers.
-
-### Per-call logging (Helicone)
-
-- Helicone is a drop-in proxy for the Anthropic API. Free tier handles the volume.
-- Configured by setting the SDK base URL to Helicone's proxy. The OpenAI judge call (eval-time only, not user-facing) is also routed through Helicone for unified dashboards.
-- Every call automatically logged with timestamp, model, input tokens, output tokens, latency, cost, request ID, and custom headers for trace ID and step name.
-- Helicone dashboard provides aggregate metrics and per-request drill-down for free.
-- **Privacy implication:** Helicone is the source of truth for call data, which means every user's JD and CV is stored on Helicone's infrastructure indefinitely (free-tier retention policy applies). The earlier "inputs in 7-day-TTL Redis" privacy claim was wrong because it ignored the proxy. The footer now states this honestly — see §10 / §14.
+Every agent call is logged via internal trace storage.
 
 ### Per-generation trace (internal)
 
 - Each user request gets a `trace_id` (UUID).
-- All 5+ agent calls for that generation share the trace_id via a Helicone custom header.
+- All 5+ agent calls for that generation share the trace_id, stored in Upstash Redis.
 - The user-facing response includes the trace_id so the UI can show "View trace" with the full agent chain.
 - Trace view in UI: ordered list of agent calls with truncated inputs, truncated outputs, latency, cost, and quality score.
 
@@ -284,8 +276,7 @@ Every agent call is logged. Two layers.
 - Public `/stats` page (totals, p50/p95 latency, mean cost, latest eval scores, judge model named)
 - Mobile responsive
 - Rate limiting: **10 generations per IP per 24 hours, 3 per hour** (the original 5/24h was too tight for a user iterating their CV and didn't actually defend against abuse since CGNAT shares IPs; the per-hour burst is the real defense)
-- Helicone integration for observability (with honest privacy disclosure)
-- Honest privacy footer: "Your JD and CV are sent to Anthropic and our observability provider (Helicone) and may be retained per their policies. Do not paste anything you wouldn't put in a job application."
+- Honest privacy footer: "Your JD and CV are sent to Anthropic and OpenAI and may be retained per their policies. Do not paste anything you wouldn't put in a job application."
 - Evals harness with 30 test cases, deterministic groundedness verifier, and a cross-family judge prompt
 
 ## 10. Out of scope, explicitly
@@ -311,7 +302,7 @@ Including the four "AI skills 2026" concepts that don't fit Cible naturally, so 
 
 **Backend**
 - Next.js API routes deployed on the **Edge runtime** (25s wall-clock limit; needed because the hobby-tier Node serverless cap is 10s and our honest p95 latency target is up to 20s)
-- Anthropic SDK (`@anthropic-ai/sdk`), proxied through Helicone, with **prompt caching** enabled (`cache_control: { type: "ephemeral" }`) on the raw CV and structured JD message blocks
+- Anthropic SDK (`@anthropic-ai/sdk`) with **prompt caching** enabled (`cache_control: { type: "ephemeral" }`) on the raw CV and structured JD message blocks
 - OpenAI SDK (`openai`) for the cross-family critic (eval-time and runtime telemetry) and for `text-embedding-3-small` used by the groundedness verifier
 - Models: `claude-sonnet-4-6`, `claude-haiku-4-5-20251001`, `gpt-5` (critic + judge), `text-embedding-3-small` (verifier)
 - Cheerio for HTML parsing of job pages
@@ -320,8 +311,7 @@ Including the four "AI skills 2026" concepts that don't fit Cible naturally, so 
 **Infrastructure**
 - Vercel for hosting (Edge runtime; hobby tier is fine until volume forces an upgrade)
 - Upstash Redis for rate limiting and trace storage (free tier)
-- Helicone for observability (free tier) — privacy implications disclosed in §8 and the footer
-- Env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HELICONE_API_KEY`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`
+- Env vars: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`
 
 **Evals tooling**
 - Plain TypeScript script under `evals/`
@@ -429,10 +419,9 @@ Response codes:
 | Latency feels slow | Medium | Medium | Stream stage updates so perceived latency is time-to-first-token, not time-to-last-byte. Parallelize steps 2/3/4. Honest p50 target ~12s, p95 ~20s — communicate this rather than promising <10s and disappointing. |
 | Vercel Edge function timeout (25s) | Low | High | Edge runtime gives us 25s vs hobby Node 10s. Worst case (both writers retry) is still under 20s. If we breach, return partial result with `groundedness.pass: false` warning. |
 | Output quality is generic | Medium | High | Evals harness with 30 postings, per-case regression check, Wilcoxon paired test. Iterate prompts until mean relevance > 4.0 and groundedness pass rate ≥95% before launch. |
-| Helicone outage breaks generation | Low | High | Helicone proxy in the auth path means downtime = pipeline down. Acceptable for v1 portfolio; v2 should bypass proxy on Helicone 5xx and log locally instead. |
-| Time overruns past 14 days | Medium | Medium | Drop the in-app trace view (Helicone dashboard suffices). UI polish slips before evals or groundedness. |
+| Time overruns past 14 days | Medium | Medium | Drop the in-app trace view. UI polish slips before evals or groundedness. |
 | Nobody uses it | Medium | Low | Launch on r/cscareerquestions, Indie Hackers, LinkedIn, Hacker News, French Tech Slack groups. 30+ users floor is achievable. |
-| Privacy concerns | Was Medium | Medium | **Fixed (honestly):** footer states that JDs and CVs are sent to Anthropic, OpenAI, and Helicone and may be retained per their policies. No false "7-day TTL" claim. Users self-redact if needed. |
+| Privacy concerns | Was Medium | Medium | **Fixed (honestly):** footer states that JDs and CVs are sent to Anthropic and OpenAI and may be retained per their policies. No false "7-day TTL" claim. Users self-redact if needed. |
 
 ## 15. 14-day plan
 
@@ -440,7 +429,7 @@ Reordered so the eval scaffold lands **before** the agents it judges. The origin
 
 **Day 1: Scaffold and deploy**
 - Init Next.js + TypeScript + Tailwind + shadcn on the Edge runtime
-- Add Anthropic SDK + prompt caching config, OpenAI SDK, Helicone proxy config, Zod, Upstash Redis client
+- Add Anthropic SDK + prompt caching config, OpenAI SDK, Zod, Upstash Redis client
 - Deploy a static landing page to Vercel
 - Confirm cible.work resolves correctly, HTTPS works
 
@@ -462,7 +451,7 @@ Reordered so the eval scaffold lands **before** the agents it judges. The origin
 - Agent 2: CV aligner (Sonnet) with `cv_evidence_span` field
 - Agent 3: cover letter writer (Sonnet) with `cv_evidence_spans` array
 - Prompt caching wired up for CV and structured JD
-- Trace ID propagation via Helicone custom headers
+- Trace ID propagation across all agent calls
 - Run evals on the 5-case set after each prompt iteration
 
 **Day 5: Question generator + critic**
@@ -489,7 +478,7 @@ Reordered so the eval scaffold lands **before** the agents it judges. The origin
 - Commit eval scores to README with the judge model named explicitly
 
 **Day 9: Observability and stats**
-- Verify Helicone is logging all calls cleanly with correct trace IDs (Anthropic + OpenAI)
+- Verify trace storage captures all calls cleanly with correct trace IDs (Anthropic + OpenAI)
 - Build `/stats` public page (totals, p50/p95 latency, mean cost, latest eval scores, judge model)
 - Build trace view UI behind "View trace" button on result cards — show verifier verdicts and per-step latency/cost
 
@@ -524,13 +513,13 @@ Pre-public-launch, all must be true:
 - [ ] Happy path generates a quality result for 5 different real job postings
 - [ ] Rate limiting verified working (spam test) — 10/24h, 3/h burst
 - [ ] "Remove AI tells" toggle visibly changes **pre-strip model output** (not just the filter doing its job)
-- [ ] Helicone is logging every step call (Anthropic and OpenAI) with correct trace IDs
+- [ ] Trace storage captures every step call (Anthropic and OpenAI) with correct trace IDs
 - [ ] `/stats` page displays real numbers, p50/p95 latency, and **names the judge model**
 - [ ] Trace view button reveals the full chain including verifier verdict and critic scores
 - [ ] README has: screenshot, architecture diagram, eval scores **with judge model named**, demo link, install instructions
 - [ ] Loom demo recorded and embedded in README; mentions the cross-family judge and the deterministic verifier as the two distinguishing features
-- [ ] GitHub repo is public, no API keys in commits (check twice — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `HELICONE_API_KEY`)
-- [ ] Honest privacy footer present (Anthropic + OpenAI + Helicone may retain inputs)
+- [ ] GitHub repo is public, no API keys in commits (check twice — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`)
+- [ ] Honest privacy footer present (Anthropic + OpenAI may retain inputs)
 - [ ] At least one friend has used it and given honest feedback
 - [ ] Mean eval relevance score is above 4.0 (cross-family judge, gpt-5)
 - [ ] Groundedness verifier pass rate is ≥95% on the 30-case eval set
